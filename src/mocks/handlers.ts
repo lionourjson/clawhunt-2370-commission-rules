@@ -35,19 +35,6 @@ let commissionRows: Record<string, RuleRow[]> = clone(COMMISSION_ROWS_BY_VERSION
 let versionSeq = commissionVersions.length;
 let tierIdSeq = 1000;
 
-/**
- * 复位全部 mock 会话状态（测试用）。handlers.ts 的存储是模块级可变状态，
- * Vitest 同一文件里的用例共享；「复制为新草稿」用例会往全平台表追加 V4+ 版本，
- * 不复位的话后续用例默认选中的不再是 V3 草稿，用例结果会依赖执行顺序。
- */
-export function resetCommissionMockStore() {
-  commissionTables = clone(COMMISSION_TABLES);
-  commissionVersions = clone(COMMISSION_VERSIONS);
-  commissionRows = clone(COMMISSION_ROWS_BY_VERSION);
-  versionSeq = commissionVersions.length;
-  tierIdSeq = 1000;
-}
-
 function fail() {
   return HttpResponse.json({ code: 1, message: '服务异常（mock 演示）' }, { status: 500 });
 }

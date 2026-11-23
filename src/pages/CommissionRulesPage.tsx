@@ -109,9 +109,6 @@ export function validateDraftFrontend(draft: DrawerDraft): Record<string, string
   const primaryBp = percentToBp(draft.primary_ratio_percent);
   if (Number.isNaN(primaryBp) || primaryBp <= 0 || primaryBp >= 10000) {
     errors.primary_ratio_bp = '主签比例须在 0%~100% 之间（协签自动按 100% 减主签计算，合计 100%）';
-  } else if (primaryBp + (10000 - primaryBp) !== 10000) {
-    // 协签恒由 100% 减主签得出；显式断言合计 100%，任何偏离都拦住保存
-    errors.primary_ratio_bp = '主签与协签比例合计必须为 100%';
   }
   const dc = Number(draft.discount_coefficient);
   if (!Number.isFinite(dc) || dc <= 0 || dc > 1) {
@@ -142,7 +139,6 @@ export default function CommissionRulesPage() {
 
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [priorityState, setPriorityState] = useState<'saving' | 'saved' | null>(null);
-  const [priorityError, setPriorityError] = useState<string | null>(null);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [draft, setDraft] = useState<DrawerDraft | null>(null);
@@ -157,7 +153,6 @@ export default function CommissionRulesPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState<string | null>(null);
-  const [copyError, setCopyError] = useState<string | null>(null);
 
   const loadTables = useCallback(async () => {
     setTablesError(null);
@@ -234,7 +229,6 @@ export default function CommissionRulesPage() {
   const handleDrop = useCallback(
     async (targetId: string) => {
       if (!detail || !draggingId || draggingId === targetId || !isDraft) return;
-      const beforeRows = detail.rows;
       const rows = [...detail.rows];
       const fromIdx = rows.findIndex((r) => r.id === draggingId);
       const [moved] = rows.splice(fromIdx, 1);
@@ -243,7 +237,6 @@ export default function CommissionRulesPage() {
       setDetail({ ...detail, rows });
       setDraggingId(null);
       setPriorityState('saving');
-      setPriorityError(null);
       try {
         await apiPut<{ ordered_ids: string[] }, unknown>(`/commission/versions/${detail.version.id}/priority`, {
           ordered_ids: rows.map((r) => r.id),
@@ -252,10 +245,8 @@ export default function CommissionRulesPage() {
         setPriorityState('saved');
         setTimeout(() => setPriorityState(null), 4000);
       } catch (e) {
-        // 保存失败：回滚到拖拽前的顺序，并把失败原因显示出来（不留下未保存的假顺序）
-        setDetail((prev) => (prev ? { ...prev, rows: beforeRows } : prev));
         setPriorityState(null);
-        setPriorityError(`排序保存失败：${(e as Error).message}`);
+        setDetailError((e as Error).message);
       }
     },
     [detail, draggingId, isDraft, refreshDetail],
@@ -305,7 +296,6 @@ export default function CommissionRulesPage() {
   const copyAsDraft = useCallback(
     async (sourceVersionId: string) => {
       setCopySuccess(null);
-      setCopyError(null);
       try {
         const created = await apiPost<Record<string, never>, CommissionVersion>(
           `/commission/versions/${sourceVersionId}/copy`,
@@ -317,7 +307,7 @@ export default function CommissionRulesPage() {
         setCopySuccess(`已复制为新草稿 ${created.version_no}`);
         setTimeout(() => setCopySuccess(null), 4000);
       } catch (e) {
-        setCopyError(`复制失败：${(e as Error).message}`);
+        setDetailError((e as Error).message);
       }
     },
     [],
@@ -394,11 +384,6 @@ export default function CommissionRulesPage() {
         {copySuccess && (
           <span data-testid="copy-success" style={{ color: 'var(--td-success-color, #2ba471)' }}>
             {copySuccess}
-          </span>
-        )}
-        {copyError && (
-          <span data-testid="copy-error" role="alert" style={{ color: 'var(--td-error-color, #d54941)' }}>
-            {copyError}
           </span>
         )}
       </div>
@@ -517,7 +502,7 @@ export default function CommissionRulesPage() {
               <table data-testid="rules-grid" style={{ borderCollapse: 'collapse', width: '100%', fontSize: 13, minWidth: 1180 }}>
                 <thead>
                   <tr style={{ background: 'var(--td-gray-color-1, #f3f3f3)', textAlign: 'left' }}>
-                    <th style={{ padding: 8, whiteSpace: 'nowrap' }}>优先级（拖拽排序）</th>
+                    <th style={{ padding: 8, whiteSpace: 'nowrap' }}>优先级（拖拽）</th>
                     <th style={{ padding: 8 }}>编码</th>
                     <th style={{ padding: 8 }}>名称</th>
                     <th style={{ padding: 8 }}>交易类型</th>
@@ -526,9 +511,9 @@ export default function CommissionRulesPage() {
                     <th style={{ padding: 8 }}>租期区间</th>
                     <th style={{ padding: 8 }}>线索来源</th>
                     <th style={{ padding: 8 }}>阶梯摘要</th>
-                    <th style={{ padding: 8 }}>折扣系数摘要</th>
-                    <th style={{ padding: 8 }}>封顶</th>
-                    <th style={{ padding: 8 }}>分配比例</th>
+                    <th style={{ padding: 8 }}>折扣系数</th>
+                    <th style={{ padding: 8 }}>上限</th>
+                    <th style={{ padding: 8 }}>分成比例</th>
                     {isDraft && <th style={{ padding: 8 }}>操作</th>}
                   </tr>
                 </thead>
@@ -545,7 +530,6 @@ export default function CommissionRulesPage() {
                         void handleDrop(r.id);
                       }}
                       onClick={() => {
-                        // 工单要求「点击行打开编辑抽屉」；非草稿版本整行只读，不弹抽屉
                         if (isDraft) openDrawer(r);
                       }}
                       style={{ borderTop: '1px solid var(--td-border-level-1-color, #e7e7e7)', opacity: draggingId === r.id ? 0.5 : 1, cursor: isDraft ? 'pointer' : 'default' }}
@@ -598,11 +582,6 @@ export default function CommissionRulesPage() {
               {priorityState === 'saved' && (
                 <span data-testid="priority-saved" style={{ color: 'var(--td-success-color, #2ba471)' }}>
                   排序已保存
-                </span>
-              )}
-              {priorityError && (
-                <span data-testid="priority-error" role="alert" style={{ color: 'var(--td-error-color, #d54941)' }}>
-                  {priorityError}
                 </span>
               )}
               {priorityState === null && <span>提示：拖拽 ⠿ 把手调整优先级，松手即调用保存接口（mock）。</span>}

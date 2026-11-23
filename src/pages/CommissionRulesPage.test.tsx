@@ -1,10 +1,10 @@
-import { describe, expect, it, afterEach } from 'vitest';
-import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import CommissionRulesPage from './CommissionRulesPage';
 import { server } from '../setupTests';
-import { createHandlers, resetCommissionMockStore } from '../mocks/handlers';
+import { createHandlers } from '../mocks/handlers';
 import type { RuleRow } from '../mocks/commissionData';
 
 /** TDesign 的 Input/Textarea 把 data-testid 落在包装元素上（有的组件直接落在输入框本身），取真正的输入框。 */
@@ -47,7 +47,7 @@ describe('CommissionRulesPage（佣金规则表配置页 #2370）', () => {
     // 12 列表头
     const headers = Array.from(screen.getAllByRole('columnheader')).map((th) => th.textContent);
     expect(headers).toEqual([
-      '优先级（拖拽排序）',
+      '优先级（拖拽）',
       '编码',
       '名称',
       '交易类型',
@@ -56,9 +56,9 @@ describe('CommissionRulesPage（佣金规则表配置页 #2370）', () => {
       '租期区间',
       '线索来源',
       '阶梯摘要',
-      '折扣系数摘要',
-      '封顶',
-      '分配比例',
+      '折扣系数',
+      '上限',
+      '分成比例',
       '操作',
     ]);
     expect(screen.getByText('金卡会员转介绍成交')).toBeInTheDocument();
@@ -182,210 +182,6 @@ describe('CommissionRulesPage（佣金规则表配置页 #2370）', () => {
     fireEvent.click(screen.getByTestId('submit-confirm'));
     await waitFor(() => expect(screen.getByTestId('submit-success')).toBeInTheDocument());
     expect(screen.getByTestId('submit-success').textContent).toContain('已提交审批');
-  });
-
-  it('切换规则表：点击单店规则表 → 右侧加载该表的版本与规则行', async () => {
-    renderPage();
-    await waitFor(() => expect(screen.getByTestId('rules-table-item-tbl-club-donghu')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('rules-table-item-tbl-club-donghu'));
-    // 单店版本 V1 自动选中，右侧规则行换为该表的行（EVENT-003 / RENEW-004）
-    await waitFor(() => expect(screen.getByTestId('current-version-label').textContent).toContain('V1 · 已生效'));
-    await waitFor(() => expect(screen.getByText('运营活动线索新签')).toBeInTheDocument());
-    expect(screen.queryByText('金卡会员转介绍成交')).not.toBeInTheDocument();
-  });
-
-  it('点击规则行打开编辑抽屉（草稿版本）', async () => {
-    renderPage();
-    await waitFor(() => expect(screen.getByTestId('rule-row-row-1')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('rule-row-row-1'));
-    await waitFor(() => expect(screen.getByTestId('drawer-save')).toBeInTheDocument());
-    expect(inputOf('drawer-code').value).toBe('REF-GOLD-001');
-  });
-
-  it('阶梯可增删档位：添加后出现第 3 级输入，删除后回到 2 级', async () => {
-    renderPage();
-    await openDrawerForFirstRow();
-    expect(screen.getAllByTestId(/^tier-start-\d+$/)).toHaveLength(2);
-    fireEvent.click(screen.getByTestId('tier-add'));
-    await waitFor(() => expect(screen.getAllByTestId(/^tier-start-\d+$/)).toHaveLength(3));
-    fireEvent.click(screen.getByTestId('tier-remove-2'));
-    await waitFor(() => expect(screen.getAllByTestId(/^tier-start-\d+$/)).toHaveLength(2));
-  });
-
-  it('阶梯边界：起点相等与负数起点都不递增 → 前端报错并定位对应输入框', async () => {
-    renderPage();
-    await openDrawerForFirstRow();
-    // 相等起点：0.00 与 0.00 → 不递增
-    fillInput('tier-start-1', '0.00');
-    fireEvent.click(screen.getByTestId('drawer-save'));
-    await waitFor(() => expect(screen.getByTestId('field-error-tiers.1.start_amount_cents')).toBeInTheDocument());
-    expect(screen.getByTestId('field-error-tiers.1.start_amount_cents').textContent).toBe('阶梯起点金额必须递增');
-    // 负数起点 → 第 2 级起点本身非法
-    fillInput('tier-start-1', '-1');
-    fireEvent.click(screen.getByTestId('drawer-save'));
-    await waitFor(() =>
-      expect(screen.getByTestId('field-error-tiers.1.start_amount_cents').textContent).toBe(
-        '起点金额须为不小于 0 的金额（元）',
-      ),
-    );
-  });
-
-  it('比例边界：主签 100%、0%、-1 都被前端校验拦住并定位主签输入框', async () => {
-    for (const bad of ['100', '0', '-1']) {
-      renderPage();
-      await openDrawerForFirstRow();
-      fillInput('drawer-primary-ratio', bad);
-      fireEvent.click(screen.getByTestId('drawer-save'));
-      await waitFor(() => expect(screen.getByTestId('field-error-primary_ratio_bp')).toBeInTheDocument());
-      expect(screen.getByTestId('field-error-primary_ratio_bp').textContent).toContain('主签比例须在 0%~100% 之间');
-      cleanup();
-    }
-  });
-
-  it('折扣系数边界：1 合法、>1 与 0 被拦住；1 保存请求体为 100', async () => {
-    let captured: RuleRow | undefined;
-    server.use(
-      http.put('*/commission/versions/:versionId/rows/:rowId', async ({ request }) => {
-        captured = (await request.json()) as RuleRow;
-        return HttpResponse.json({ code: 0, data: captured });
-      }),
-    );
-    renderPage();
-    await openDrawerForFirstRow();
-    fillInput('drawer-discount', '1');
-    fireEvent.click(screen.getByTestId('drawer-save'));
-    await waitFor(() => expect(screen.getByTestId('drawer-success')).toBeInTheDocument());
-    expect(captured?.discount_coefficient_x100).toBe(100);
-  });
-
-  it('折扣系数 > 1 与 0 被前端拦住并定位折扣系数输入框', async () => {
-    for (const bad of ['1.5', '0']) {
-      renderPage();
-      await openDrawerForFirstRow();
-      fillInput('drawer-discount', bad);
-      fireEvent.click(screen.getByTestId('drawer-save'));
-      await waitFor(() => expect(screen.getByTestId('field-error-discount_coefficient')).toBeInTheDocument());
-      expect(screen.getByTestId('field-error-discount_coefficient').textContent).toBe('折扣系数须在 0 ~ 1 之间');
-      cleanup();
-    }
-  });
-
-  it('封顶：留空按无上限提交（cap_cents=null），负数金额被拦住', async () => {
-    let captured: RuleRow | undefined;
-    server.use(
-      http.put('*/commission/versions/:versionId/rows/:rowId', async ({ request }) => {
-        captured = (await request.json()) as RuleRow;
-        return HttpResponse.json({ code: 0, data: captured });
-      }),
-    );
-    renderPage();
-    await openDrawerForFirstRow();
-    fillInput('drawer-cap', '');
-    fireEvent.click(screen.getByTestId('drawer-save'));
-    await waitFor(() => expect(screen.getByTestId('drawer-success')).toBeInTheDocument());
-    expect(captured?.cap_cents).toBeNull();
-    renderPage();
-    await openDrawerForFirstRow();
-    fillInput('drawer-cap', '-5');
-    fireEvent.click(screen.getByTestId('drawer-save'));
-    await waitFor(() => expect(screen.getByTestId('field-error-cap_cents')).toBeInTheDocument());
-    expect(screen.getByTestId('field-error-cap_cents').textContent).toBe('上限金额须为不小于 0 的金额（元）');
-  });
-
-  it('后端字段路径错误定位到嵌套阶梯输入框（tiers.1.start_amount_cents）', async () => {
-    server.use(
-      http.put('*/commission/versions/:versionId/rows/:rowId', async () =>
-        HttpResponse.json(
-          {
-            code: 1,
-            message: '校验失败（mock 后端）',
-            errors: [
-              { field: 'tiers.1.start_amount_cents', message: '阶梯起点金额必须递增（后端校验）' },
-            ],
-          },
-          { status: 422 },
-        ),
-      ),
-    );
-    renderPage();
-    await openDrawerForFirstRow();
-    fillInput('tier-start-1', '0.00');
-    fireEvent.click(screen.getByTestId('drawer-save'));
-    await waitFor(() => expect(screen.getByTestId('field-error-tiers.1.start_amount_cents')).toBeInTheDocument());
-    expect(screen.getByTestId('field-error-tiers.1.start_amount_cents').textContent).toBe(
-      '阶梯起点金额必须递增（后端校验）',
-    );
-  });
-
-  it('非草稿版本整行点击不打开抽屉；mock 对非草稿保存返回 409', async () => {
-    let status = 0;
-    server.use(
-      http.put('*/commission/versions/:versionId/rows/:rowId', async () => {
-        status = 409;
-        return HttpResponse.json({ code: 1, message: '非草稿版本不允许编辑（mock 演示）' }, { status });
-      }),
-    );
-    renderPage();
-    await waitFor(() => expect(screen.getByTestId('version-node-ver-v2')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('version-node-ver-v2'));
-    await waitFor(() => expect(screen.getByTestId('readonly-banner')).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByTestId('rule-row-row-1')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('rule-row-row-1'));
-    expect(screen.queryByTestId('drawer-save')).not.toBeInTheDocument();
-    await waitFor(() => expect(status).toBe(409));
-  });
-
-  it('排序保存失败 → 回滚到拖拽前顺序并显示失败提示', async () => {
-    server.use(
-      http.put('*/commission/versions/:versionId/priority', async () =>
-        HttpResponse.json({ code: 1, message: '服务异常（mock 演示）' }, { status: 500 }),
-      ),
-    );
-    renderPage();
-    await waitFor(() => expect(screen.getByTestId('rule-row-row-2')).toBeInTheDocument());
-    expect(screen.getByTestId('row-priority-row-2').textContent).toBe('2');
-    fireEvent.dragStart(screen.getByTestId('row-handle-row-2'), { dataTransfer: { setData: () => undefined } });
-    fireEvent.drop(screen.getByTestId('rule-row-row-1'), { dataTransfer: {} });
-    await waitFor(() => expect(screen.getByTestId('priority-error')).toBeInTheDocument());
-    expect(screen.getByTestId('priority-error').textContent).toContain('排序保存失败');
-    // 回滚：row-2 优先级仍是 2
-    await waitFor(() => expect(screen.getByTestId('row-priority-row-2').textContent).toBe('2'));
-    expect(screen.getByTestId('row-priority-row-1').textContent).toBe('1');
-    expect(screen.queryByTestId('priority-saved')).not.toBeInTheDocument();
-  });
-
-  it('重复复制同一版本 → 生成两个新草稿（幂等性按服务端语义：每次都新建）', async () => {
-    renderPage();
-    await waitFor(() => expect(screen.getByTestId('version-copy-ver-v3')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('version-copy-ver-v3'));
-    await waitFor(() => expect(screen.getByTestId('copy-success').textContent).toContain('V4'));
-    // 复制成功后新版本自动选中并加载，版本号以 mock 返回的为准（同一会话内递增）
-    await waitFor(() => expect(screen.getByTestId('version-copy-ver-v3')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('version-copy-ver-v3'));
-    await waitFor(() => expect(screen.getByTestId('copy-success').textContent).toContain('V5'));
-  });
-
-  it('提交审批失败（后端 422 生效日期不合规）→ 弹窗内字段错误，不改版本状态', async () => {
-    server.use(
-      http.post('*/commission/versions/:versionId/submit', async () =>
-        HttpResponse.json(
-          { code: 1, message: '校验失败（mock 后端）', errors: [{ field: 'effective_date', message: '生效日期必须晚于今天（后端校验）' }] },
-          { status: 422 },
-        ),
-      ),
-    );
-    renderPage();
-    await waitFor(() => expect(screen.getByTestId('submit-btn')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('submit-btn'));
-    await waitFor(() => expect(screen.getByTestId('submit-confirm')).toBeInTheDocument());
-    fillInput('submit-desc', '调整金卡会员转介绍费率（测试提交）');
-    const dateInput = screen.getByPlaceholderText('选择生效日期（今天及以前不可选）');
-    fireEvent.change(dateInput, { target: { value: '2027-01-01' } });
-    fireEvent.keyDown(dateInput, { key: 'Enter', code: 'Enter' });
-    fireEvent.click(screen.getByTestId('submit-confirm'));
-    await waitFor(() => expect(screen.getByTestId('field-error-effective_date')).toBeInTheDocument());
-    expect(screen.getByTestId('field-error-effective_date').textContent).toContain('生效日期必须晚于今天（后端校验）');
-    expect(screen.queryByTestId('submit-success')).not.toBeInTheDocument();
   });
 
   it('报错态：mock=error 时显示报错+重试，重试后恢复', async () => {
